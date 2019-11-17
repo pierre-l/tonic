@@ -65,10 +65,15 @@ path = "src/multiplex/client.rs"
 name = "gcp-client"
 path = "src/gcp/client.rs"
 
+[[bin]]
+name = "greeter"
+path = "src/greeter/greeter.rs"
+
 [dependencies]
 tonic = { path = "../tonic", features = ["rustls"] }
 bytes = "0.4"
 prost = "0.5"
+flatbuffers = { version = "0.6", optional = true }
 
 tokio = "=0.2.0-alpha.6"
 futures-preview = { version = "=0.3.0-alpha.19", default-features = false, features = ["alloc"]}
@@ -83,6 +88,9 @@ rand = "0.7.2"
 
 # Required for wellknown types
 prost-types = "0.5"
+
+[features]
+default = ["flatbuffers"]
 
 [build-dependencies]
 tonic-build = { path = "../tonic-build" }

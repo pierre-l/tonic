@@ -21,8 +21,12 @@ syn = "1.0"
 quote = "1.0"
 proc-macro2 = "1.0"
 
+# TODO FlatBuffers: Merge the changes then fix this
+butte = { path = "../../magnet-butte/butte", optional = true }
+
 [features]
-default = ["transport", "rustfmt"]
+default = ["transport", "rustfmt", "flatbuffers"]
+flatbuffers = ["butte"]
 rustfmt = []
 transport = []
 

@@ -58,7 +58,7 @@
 #![doc(test(no_crate_inject, attr(deny(rust_2018_idioms))))]
 
 use proc_macro2::{Delimiter, Group, Ident, Literal, Punct, Spacing, Span, TokenStream};
-use prost_build::{Config, Method};
+use prost_build::{Config, Method, Service};
 use quote::{ToTokens, TokenStreamExt};
 
 #[cfg(feature = "rustfmt")]
@@ -67,6 +67,8 @@ use std::{
     io,
     path::{Path, PathBuf},
 };
+use std::io::Read;
+use butte::types::{Schema, Element, Rpc};
 
 mod client;
 mod server;
@@ -152,14 +154,114 @@ impl Builder {
 
         config.compile_protos(protos, includes)?;
 
-        #[cfg(feature = "rustfmt")]
-        {
-            if format {
-                fmt(out_dir.to_str().expect("Expected utf8 out_dir"));
-            }
+        apply_rustfmt(format, out_dir.as_path());
+
+        Ok(())
+    }
+
+    #[cfg(feature = "flatbuffers")]
+    /// Compile the .fbs files and execute code generation.
+    pub fn compile_fb<P: AsRef<Path>>(self, fbs_path: &[P], includes: &[P]) -> io::Result<()> {
+        // TODO Should take inspiration from config.compile_protos
+
+        for fbs_path in fbs_path {
+            let mut file = std::fs::File::open(fbs_path)?;
+
+            let mut file_content = String::new();
+            file.read_to_string(&mut file_content)?;
+
+            let (_, schema) = butte::parser::schema_decl(&file_content)
+                .unwrap(); // TODO Get rid of the unwrap with proper error handling.
+
+            let schema_code = schema.to_token_stream().to_string();
+
+            let generated_code = schema_code + &self.generate_fb_code(schema);
+
+            // TODO Use the `out_dir` & split in 3 files.
+            std::fs::write("src/greeter/greeter.rs", generated_code.to_string())?;
+
+            let dir_path = Path::new("src/greeter");
+
+            apply_rustfmt(true, dir_path);
         }
 
         Ok(())
+    }
+
+    #[cfg(feature = "flatbuffers")]
+    fn generate_fb_code(&self, schema: Schema<'_>) -> String {
+        let services: Vec<Service> = schema.elements.iter().filter_map(|element|{
+            if let Element::Rpc(rpc) = element {
+                Some(rpc)
+            } else {
+                None
+            }
+        })
+            .map(Rpc::prost_service)
+            .collect();
+
+        let mut tokens = vec![];
+
+        if self.build_client {
+            let clients: Vec<TokenStream> = services.iter()
+                .map(|service|{
+                    client::generate(&service, "super")
+                })
+                .collect();
+
+            if !clients.is_empty() {
+                let client_mod = quote::quote! {
+                    /// Generated client implementations.
+                    pub mod client {
+                        #![allow(unused_variables, dead_code, missing_docs)]
+                        use tonic::codegen::*;
+
+                        #(#clients)*
+                    }
+
+                };
+
+                tokens.push(client_mod);
+            }
+        };
+
+        if self.build_server {
+            let servers: Vec<TokenStream> = services.iter()
+                .map(|service|{
+                    server::generate(&service, "super")
+                })
+                .collect();
+
+            if !servers.is_empty() {
+                let server_mod = quote::quote! {
+                    /// Generated server implementations.
+                    pub mod server {
+                        #![allow(unused_variables, dead_code, missing_docs)]
+                        use tonic::codegen::*;
+
+                        #(#servers)*
+                    }
+
+                };
+
+                tokens.push(server_mod)
+            }
+        }
+
+        let tokens = quote::quote! {
+            #(#tokens)*
+        };
+
+        tokens.to_string()
+    }
+}
+
+fn apply_rustfmt<P: AsRef<Path>>(format: bool, out_dir: P) {
+    #[cfg(feature = "rustfmt")]
+    {
+        if format {
+            fmt(out_dir.as_ref().to_str().expect("Expected utf8 out_dir"));
+        }
     }
 }
 
@@ -190,9 +292,19 @@ pub fn compile_protos(proto_path: impl AsRef<Path>) -> io::Result<()> {
         .parent()
         .expect("proto file should reside in a directory");
 
-    self::configure().compile(&[proto_path], &[proto_dir])?;
+    self::configure().compile(&[proto_path], &[proto_dir])
+}
 
-    Ok(())
+pub fn compile_fb_schemas(schema_path: impl AsRef<Path>) -> io::Result<()> {
+    let schema_path: &Path = &schema_path.as_ref();
+
+    // Directory where the main .fbs file resides in
+    let schema_dir = schema_path
+        .parent()
+        .expect("fbs file should reside in a directory");
+
+    self::configure()
+        .compile_fb(&[schema_path], &[schema_dir])
 }
 
 #[cfg(feature = "rustfmt")]
